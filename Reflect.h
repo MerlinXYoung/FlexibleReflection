@@ -12,11 +12,11 @@ namespace reflect {
 struct TypeDescriptor {
     const char* name;
     size_t size;
-
     TypeDescriptor(const char* name, size_t size) : name{name}, size{size} {}
     virtual ~TypeDescriptor() {}
     virtual std::string getFullName() const { return name; }
     virtual void dump(const void* obj, int indentLevel = 0) const = 0;
+    virtual void* create()const{ throw std::runtime_error("can't create "+std::string(name));}
 };
 
 //--------------------------------------------------------
@@ -26,6 +26,8 @@ struct TypeDescriptor {
 // Declare the function template that handles primitive types such as int, std::string, etc.:
 template <typename T>
 TypeDescriptor* getPrimitiveDescriptor();
+
+
 
 // A helper class to find TypeDescriptors in different ways:
 struct DefaultResolver {
@@ -49,11 +51,16 @@ struct DefaultResolver {
     }
 };
 
+
 // This is the primary class template for finding all TypeDescriptors:
 template <typename T>
 struct TypeResolver {
     static TypeDescriptor* get() {
+        // typedef typename std::conditional<std::is_array<T>::value, DefaultArrayResolver<T>, DefaultResolver>::type Resolver_t;
+        
+        // Resolver_t::get< typename std::remove_extent<T>::type > ();
         return DefaultResolver::get<T>();
+        // return DefaultResolverT<T>::get();
     }
 };
 
@@ -62,9 +69,11 @@ struct TypeResolver {
 //--------------------------------------------------------
 
 struct TypeDescriptor_Struct : TypeDescriptor {
+    friend struct DefaultResolver; 
     struct Member {
         const char* name;
         size_t offset;
+        // size_t size;
         TypeDescriptor* type;
     };
 
@@ -82,7 +91,7 @@ struct TypeDescriptor_Struct : TypeDescriptor {
             member.type->dump((char*) obj + member.offset, indentLevel + 1);
             std::cout << std::endl;
         }
-        std::cout << std::string(4 * indentLevel, ' ') << "}";
+        std::cout << std::string(4 * indentLevel, ' ') << "}" << std::endl;
     }
 };
 
@@ -102,9 +111,11 @@ struct TypeDescriptor_Struct : TypeDescriptor {
 #define REFLECT_STRUCT_MEMBER(name) \
             {#name, offsetof(T, name), reflect::TypeResolver<decltype(T::name)>::get()},
 
+
 #define REFLECT_STRUCT_END() \
         }; \
     }
+
 
 //--------------------------------------------------------
 // Type descriptors for std::vector
@@ -157,5 +168,43 @@ public:
         return &typeDesc;
     }
 };
+
+
+struct TypeDescriptor_CArray : TypeDescriptor {
+    TypeDescriptor* itemType;
+    size_t size;
+    template<typename ItemType>
+    TypeDescriptor_CArray(ItemType*, size_t size ) : TypeDescriptor{"carray", sizeof(ItemType)*size},
+                         itemType{TypeResolver<ItemType>::get()}, size(size) {
+        
+    }
+    virtual void dump(const void* obj, int indentLevel) const override {
+        // std::cout << "carray[" << SIZE << "]{\"" << *(const T*) obj << "\"}";
+        std::cout << getFullName();
+        if (size == 0) {
+            std::cout << "{}";
+        } else {
+            std::cout << "{" << std::endl;
+            for (size_t index = 0; index < size; index++) {
+                std::cout << std::string(4 * (indentLevel + 1), ' ') << "[" << index << "] ";
+                uintptr_t ptr=reinterpret_cast<uintptr_t>(obj);
+                itemType->dump(reinterpret_cast<const void*>(ptr+ index*itemType->size), indentLevel + 1);
+                std::cout << std::endl;
+            }
+            std::cout << std::string(4 * indentLevel, ' ') << "}";
+        }
+
+    }
+};
+
+template <typename T, size_t SIZE>
+class TypeResolver<T[SIZE]> {
+public:
+    static TypeDescriptor* get() {
+        static TypeDescriptor_CArray typeDesc{(T*) nullptr, SIZE};
+        return &typeDesc;
+    }
+};
+
 
 } // namespace reflect
